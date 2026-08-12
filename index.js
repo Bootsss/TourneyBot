@@ -1,5 +1,6 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Events, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Events, PermissionFlagsBits, REST, Routes } = require('discord.js');
+const { commands } = require('./commands');
 
 const {
   DISCORD_TOKEN,
@@ -55,7 +56,17 @@ async function logToSheet(payload) {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-client.once(Events.ClientReady, (c) => console.log(`Logged in as ${c.user.tag}`));
+client.once(Events.ClientReady, async (c) => {
+  console.log(`Logged in as ${c.user.tag}`);
+
+  try {
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    await rest.put(Routes.applicationGuildCommands(c.user.id, process.env.GUILD_ID), { body: commands });
+    console.log('Slash commands registered.');
+  } catch (err) {
+    console.error('Failed to auto-register slash commands:', err);
+  }
+});
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;

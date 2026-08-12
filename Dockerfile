@@ -5,6 +5,6 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY index.js deploy-commands.js ./
+COPY index.js deploy-commands.js commands.js ./
 
 CMD ["node", "index.js"]
