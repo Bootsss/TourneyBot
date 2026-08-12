@@ -1,0 +1,7 @@
+app = "tourneybot"
+primary_region = "syd"
+
+[build]
+
+[[vm]]
+  size = "shared-cpu-1x"
