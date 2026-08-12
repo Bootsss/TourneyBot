@@ -1,5 +1,16 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Events, PermissionFlagsBits, REST, Routes } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  Events,
+  PermissionFlagsBits,
+  REST,
+  Routes,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
+} = require('discord.js');
 const { commands } = require('./commands');
 
 const {
@@ -69,13 +80,13 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
   try {
-    if (interaction.commandName === 'tourney') {
-      await handleTourney(interaction);
-    } else if (interaction.commandName === 'tourney-reset') {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'tourney') {
+      await handleTourneyCommand(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'tourney-reset') {
       await handleTourneyReset(interaction);
+    } else if (interaction.isModalSubmit() && interaction.customId.startsWith('tourneyModal_')) {
+      await handleTourneyModalSubmit(interaction);
     }
   } catch (err) {
     console.error('Unhandled interaction error:', err);
@@ -85,7 +96,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-async function handleTourney(interaction) {
+// Step 1: /tourney region:US -> opens a form popup for the rest.
+// The region is encoded into the modal's customId since a modal submission
+// is a separate interaction that doesn't carry the original command's options.
+async function handleTourneyCommand(interaction) {
   if (interaction.channelId !== SIGNUP_CHANNEL_ID) {
     await interaction.reply({ content: `Please use \`/tourney\` in <#${SIGNUP_CHANNEL_ID}>.`, ephemeral: true });
     return;
@@ -101,43 +115,98 @@ async function handleTourney(interaction) {
   }
 
   const region = interaction.options.getString('region', true);
-  const steamUrl = interaction.options.getString('steam_url', true).trim();
+
+  const modal = new ModalBuilder()
+    .setCustomId(`tourneyModal_${region}`)
+    .setTitle(`Rust Tournament Signup (${region})`);
+
+  const steamInput = new TextInputBuilder()
+    .setCustomId('steamUrl')
+    .setLabel('Your Steam profile URL')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('https://steamcommunity.com/id/yourname')
+    .setRequired(true);
+
+  const teammate1Discord = new TextInputBuilder()
+    .setCustomId('teammate1Discord')
+    .setLabel('Teammate 1 Discord username (optional)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const teammate1Steam = new TextInputBuilder()
+    .setCustomId('teammate1Steam')
+    .setLabel('Teammate 1 Steam URL (optional)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const teammate2Discord = new TextInputBuilder()
+    .setCustomId('teammate2Discord')
+    .setLabel('Teammate 2 Discord username (optional)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const teammate2Steam = new TextInputBuilder()
+    .setCustomId('teammate2Steam')
+    .setLabel('Teammate 2 Steam URL (optional)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(steamInput),
+    new ActionRowBuilder().addComponents(teammate1Discord),
+    new ActionRowBuilder().addComponents(teammate1Steam),
+    new ActionRowBuilder().addComponents(teammate2Discord),
+    new ActionRowBuilder().addComponents(teammate2Steam)
+  );
+
+  await interaction.showModal(modal);
+}
+
+// Step 2: form submitted -> validate, assign role, invite teammates, log to sheet.
+async function handleTourneyModalSubmit(interaction) {
+  const region = interaction.customId.split('_')[1];
   const roleId = region === 'US' ? US_ROLE_ID : AU_ROLE_ID;
 
+  // Re-check in case they somehow opened two forms or re-submitted after registering.
+  const member = interaction.member;
+  if (member.roles.cache.has(US_ROLE_ID) || member.roles.cache.has(AU_ROLE_ID)) {
+    await interaction.reply({ content: "You're already registered.", ephemeral: true });
+    return;
+  }
+
+  const steamUrl = interaction.fields.getTextInputValue('steamUrl').trim();
   if (!STEAM_URL_REGEX.test(steamUrl)) {
     await interaction.reply({
       content:
         "That doesn't look like a valid Steam profile URL. It should look like " +
-        '`https://steamcommunity.com/id/yourname` or `https://steamcommunity.com/profiles/7656119...`.',
+        '`https://steamcommunity.com/id/yourname`. Run `/tourney` again to retry.',
       ephemeral: true,
     });
     return;
   }
 
-  // Collect teammate slots, validating that discord+steam are provided as a pair.
   const teammateSlots = [1, 2].map((n) => ({
-    discord: interaction.options.getString(`teammate${n}_discord`)?.trim() || null,
-    steam: interaction.options.getString(`teammate${n}_steam`)?.trim() || null,
+    discord: interaction.fields.getTextInputValue(`teammate${n}Discord`)?.trim() || null,
+    steam: interaction.fields.getTextInputValue(`teammate${n}Steam`)?.trim() || null,
   }));
 
   for (const [i, slot] of teammateSlots.entries()) {
     if ((slot.discord && !slot.steam) || (!slot.discord && slot.steam)) {
       await interaction.reply({
-        content: `Teammate ${i + 1}: please provide both their Discord username and Steam URL, or leave both blank.`,
+        content: `Teammate ${i + 1}: please fill in both their Discord username and Steam URL, or leave both blank. Run \`/tourney\` again to retry.`,
         ephemeral: true,
       });
       return;
     }
     if (slot.steam && !STEAM_URL_REGEX.test(slot.steam)) {
       await interaction.reply({
-        content: `Teammate ${i + 1}'s Steam URL doesn't look valid. Expected format: https://steamcommunity.com/id/name`,
+        content: `Teammate ${i + 1}'s Steam URL doesn't look valid. Run \`/tourney\` again to retry.`,
         ephemeral: true,
       });
       return;
     }
   }
 
-  // Assign the role first — don't log or message anyone if this fails.
   try {
     await member.roles.add(roleId);
   } catch (err) {
@@ -149,8 +218,6 @@ async function handleTourney(interaction) {
     return;
   }
 
-  // Attempt to DM any teammate already in the server; always prepare the message
-  // text as a fallback the registrant can send manually.
   const registrantName = interaction.user.username;
   const inviteMessage = buildInviteMessage(registrantName);
   const teammateResults = [];
@@ -166,7 +233,6 @@ async function handleTourney(interaction) {
         await foundMember.send(inviteMessage);
         dmSent = true;
       } catch (err) {
-        // Common cause: their DMs are closed to non-friends. Not an error worth logging loudly.
         dmSent = false;
       }
     }
@@ -196,9 +262,7 @@ async function handleTourney(interaction) {
     return;
   }
 
-  // Build the reply: confirmation + per-teammate status + manual-send text for anyone not auto-DMed.
   let reply = `You're registered as **${region} Competitor**. Good luck!`;
-
   const notReached = teammateResults.filter((t) => !t.dmSent);
   const reached = teammateResults.filter((t) => t.dmSent);
 
@@ -208,7 +272,7 @@ async function handleTourney(interaction) {
   if (notReached.length) {
     reply +=
       `\n\nCouldn't auto-message: ${notReached.map((t) => t.discord).join(', ')} ` +
-      `(they're either not in the server yet or have DMs closed). Send them this yourself:\n\n${inviteMessage}`;
+      `(not in the server yet, or DMs closed). Send them this yourself:\n\n${inviteMessage}`;
   }
 
   await interaction.reply({ content: reply, ephemeral: true });

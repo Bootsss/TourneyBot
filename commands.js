@@ -11,24 +11,6 @@ const commands = [
         .setRequired(true)
         .addChoices({ name: 'US', value: 'US' }, { name: 'AU', value: 'AU' })
     )
-    .addStringOption((option) =>
-      option
-        .setName('steam_url')
-        .setDescription('Your Steam profile URL, e.g. https://steamcommunity.com/id/yourname')
-        .setRequired(true)
-    )
-    .addStringOption((option) =>
-      option.setName('teammate1_discord').setDescription("Teammate 1's Discord username (optional)").setRequired(false)
-    )
-    .addStringOption((option) =>
-      option.setName('teammate1_steam').setDescription("Teammate 1's Steam profile URL (optional)").setRequired(false)
-    )
-    .addStringOption((option) =>
-      option.setName('teammate2_discord').setDescription("Teammate 2's Discord username (optional)").setRequired(false)
-    )
-    .addStringOption((option) =>
-      option.setName('teammate2_steam').setDescription("Teammate 2's Steam profile URL (optional)").setRequired(false)
-    )
     .toJSON(),
   new SlashCommandBuilder()
     .setName('tourney-reset')
